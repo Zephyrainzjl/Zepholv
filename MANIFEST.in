@@ -1,0 +1,4 @@
+include README.md
+recursive-include docs *.md *.py *.txt Makefile *.bat
+recursive-include cpp *.txt *.cpp *.hpp *.h
+prune docs/_build
