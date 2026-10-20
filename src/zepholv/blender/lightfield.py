@@ -13,7 +13,6 @@ import math
 
 from .client import Blender
 
-
 @dataclass(frozen=True)
 class CameraGrid:
     """All array dimensions are (rows, columns), all world lengths are metres.

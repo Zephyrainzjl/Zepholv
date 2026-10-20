@@ -1,6 +1,10 @@
 MANIFEST.in
 README.md
 pyproject.toml
+assets/bunny_parallax.gif
+assets/cover.svg
+assets/depth_parallax.gif
+assets/teapot_parallax.gif
 cpp/CMakeLists.txt
 cpp/bindings.cpp
 docs/Makefile

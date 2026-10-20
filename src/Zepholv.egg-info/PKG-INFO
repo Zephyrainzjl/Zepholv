@@ -25,151 +25,948 @@ Requires-Dist: nbformat<6,>=5.10; extra == "notebook"
 Requires-Dist: nbclient<1,>=0.10; extra == "notebook"
 Requires-Dist: nbconvert<8,>=7; extra == "notebook"
 
-# Zepholv
+<!-- Cover: replace assets/cover.svg with your own artwork, or change only the src below to a PNG/JPG/SVG. -->
+<p align="center">
+  <img src="assets/cover.svg" alt="Zepholv — computational light fields and phase-only holography" width="100%">
+</p>
 
-Zepholv 的 Python 安装包骨架，采用 `src/` 布局，预留 C++ 扩展接口。
-提供 Blender 外部调用、光场采集、Hogel 重排、相位编码、数值重建与打印数据导出。
-论文计算流程的参数、来源及未公开细节见 [复现说明](docs/reproduction.md)。
+<h1 align="center">Zepholv</h1>
+<p align="center"><b>Computational Light Fields · Phase-only Holography · Programmable Blender</b></p>
+<p align="center">面向三维场景、方向性光场与相位全息数据的模块化 Python 工具。</p>
 
-## 目录
+Zepholv 将 Blender 的可编程场景生成与光场采集、Hogel 像素重排、IFTA 相位优化、数值传播以及 SLM 数据导出连接在同一组清晰的 Python 接口中。既可逐阶段检查强度、相位和采样几何，也可通过单一入口执行完整计算。
 
-```text
-Zepholv/
-├── README.md
-├── pyproject.toml          # 包信息、依赖与构建配置
-├── MANIFEST.in            # 源码分发包含的额外文件
-├── src/
-│   └── zepholv/
-│       ├── __init__.py    # 包入口与版本
-│       ├── zepholv.py     # Python 功能实现位置
-│       ├── blender/      # Blender 调用、再中心化采集、场景与独立进程桥接
-│       └── stereogram/  # Hogel、IFTA、数值重建、打印数据及可视化 API
-├── cpp/
-│   ├── CMakeLists.txt     # 独立的 C++ 扩展构建入口
-│   └── bindings.cpp      # pybind11 绑定占位
-└── docs/
-    ├── conf.py
-    ├── index.md
-    ├── usage.md
-    ├── blender.md
-    ├── reproduction.md
-    ├── api.md
-    ├── cpp.md
-    ├── requirements.txt
-    ├── Makefile
-    └── make.bat
-```
+**核心能力：** 外部 Blender Python 桥接 · 再中心化相机阵列 · 无损 Hogel 重排 · 全阵列相位编码 · 全视差可视化 · 有限瞳孔与自由空间传播诊断。
 
-测试目录与 `Zepholv/` 平级，位于 `D:/pyworks/quanxi/test/`，不在安装包内部：
+## 实验视图
 
-```text
-quanxi/
-├── Zepholv/                         # 上面的安装包目录
-└── test/
-    ├── reproduction.ipynb           # 可运行的中文分阶段流程、结果图与交互三维图
-    ├── test_*.py                    # 通过公开 API 测试
-    ├── run_reproduction.py
-    ├── run_tests.py
-    ├── acquire.py
-    ├── reference/                   # 来源与参考源码快照
-    ├── assets/                      # 模型
-    └── results/                     # 全部输出；paper/index.html 为论文尺寸结果入口
-```
+<table>
+  <tr>
+    <td align="center"><img src="assets/teapot_parallax.gif" alt="茶壶与球的水平数值视差" width="290"><br><b>茶壶与球</b><br>水平视差</td>
+    <td align="center"><img src="assets/bunny_parallax.gif" alt="兔子与胡萝卜的水平数值视差" width="290"><br><b>兔子与胡萝卜</b><br>水平视差</td>
+    <td align="center"><img src="assets/depth_parallax.gif" alt="多深度几何体的垂直数值视差" width="290"><br><b>多深度几何体</b><br>垂直视差</td>
+  </tr>
+</table>
 
-## 安装与使用
+以上动图由本项目已保存的**量化相位傅里叶重建强度**逆映射生成，采用提出分支的十个方向采样，不是直接播放输入照片，也不是实体光学记录照片。兔子使用 Stanford 扫描模型，其余场景元素由程序构建。
 
-需要 Python 3.10 或更高版本。在项目根目录执行：
+默认计算配置为 50×50 个空间 Hogel、200×200 的目标角向编码尺寸，以及 10/30/50/100 次迭代检查点。三个场景、两种分支的既有计算覆盖 7,800 个采集视图、15,000 个已编码 Hogel 和 15,000 张 SLM 导出帧。较少视角与较高单幅分辨率是不同的采样预算，不应将视角数量减少直接解释为总计算成本下降。
+
+## 安装与第一个计算
+
+需要 Python 3.10+；执行 Blender 任务时，还需本机安装 Blender。宿主 Python 不需要安装 `bpy`。
 
 ```console
 python -m pip install -e .
-python -c "import zepholv; print(zepholv.__version__)"
 ```
 
-发布名为 `Zepholv`，Python 导入名统一使用小写 `zepholv`。
-数值与可视化依赖由 `pyproject.toml` 自动安装；Blender 使用单独安装的软件，
-不在宿主环境中安装 `bpy`。
+以下示例使用较小尺寸，保留完整的双分支计算流程：
 
-## Blender 调用
+```python
+from pathlib import Path
+from uuid import uuid4
+from zepholv.blender import Blender, RenderSettings
+from zepholv.stereogram import SynthesisConfig, run_reproduction
 
-只需传入 Blender 安装目录或可执行文件路径，无需额外安装 `bpy`：
+blender = Blender(r"D:\software_fileprocess\blender5.1", low_priority=True)
+output = Path("zepholv_runs") / uuid4().hex[:12]
+
+summary_path = run_reproduction(
+    blender,
+    output,
+    scene="teapot_sphere",
+    config=SynthesisConfig.validation(),
+    settings=RenderSettings(samples=16, threads=2),
+)
+print(summary_path)
+```
+
+将配置换成 `SynthesisConfig()` 即使用默认的大尺寸设置。更换电脑时，为 `Blender` 提供该电脑的安装目录或可执行文件；任务依赖的插件、引擎与素材仍需要在目标环境可用。
+
+## 数值约定
+
+| 对象 | 表示 |
+|---|---|
+| 视图阵列 `P[V,U,y,x]` | 相机行、相机列、图像行、图像列；线性灰度强度 |
+| Hogel 阵列 `H[i,j,a,b]` | 空间行、空间列、角向行、角向列；不是相位 |
+| 单 Hogel 相位 `phase` | 二维弧度数组 |
+| 相位码 `codes` | 整数相位索引，通常为 0～255 |
+| 复场 `field` | 包含幅度与相位的复数数组 |
+| 长度 / 时间 / shape | 米 / 秒 / `(行, 列)` |
+
+采集图像先解 sRGB 再转线性亮度；强度的平方根才是幅度。连续相位优化、最终相位量化和八级灰度显示是不同操作。傅里叶重建、几何重聚焦、瞳孔积分和输入网格的三维显示也不具有相同的物理含义。
+
+## API 导航
+
+- [Blender 执行与结果协议](#blender-执行与结果协议)
+- [相机、渲染与模型](#相机渲染与模型)
+- [配置与方法约定](#配置与方法约定)
+- [强度、重排与逆映射](#强度重排与逆映射)
+- [傅里叶、IFTA 与整阵列编码](#傅里叶ifta-与整阵列编码)
+- [传播、重聚焦与瞳孔](#传播重聚焦与瞳孔)
+- [SLM 与打印任务](#slm-与打印任务)
+- [完整流程、可视化与资源控制](#完整流程可视化与资源控制)
+
+下面覆盖 `zepholv.blender` 与 `zepholv.stereogram` 当前导出的全部公共名字，以及调用所需的公共方法；数值模块中可直接导入的颜色转换与插值工具也单列说明。下划线内部函数不是稳定公共 API。
+
+## Blender 执行与结果协议
+
+<details>
+<summary><b>Blender：初始化、版本与通用参数</b></summary>
+
+`Blender(path, *, timeout=None, env=None, low_priority=False)`
+
+| 参数 / 属性 | 含义 |
+|---|---|
+| `path` | 安装目录、可执行文件或 macOS 的应用路径 |
+| `timeout` | 后台调用的默认超时秒数；`None` 表示不设默认时限 |
+| `env` | 为 Blender 子进程补充的环境变量映射 |
+| `low_priority` | Windows 后台任务使用低于正常的进程优先级 |
+| `executable` | 解析得到的可执行文件 `Path` |
+| `version()` | 启动版本查询，返回首行版本字符串 |
 
 ```python
 from zepholv.blender import Blender
 
-blender = Blender(r"D:\software_fileprocess\blender5.1")
-job = blender.run('''
-bpy.ops.mesh.primitive_cube_add(size=params['size'])
-result = {'name': bpy.context.object.name, 'version': bpy.app.version_string}
-''', params={'size': 2})
+blender = Blender(
+    r"D:\software_fileprocess\blender5.1",
+    timeout=120,
+    env={},
+    low_priority=True,
+)
+print(blender.version())
+print(blender.executable)
+```
+
+`run`、`run_script`、`call`、`render` 每次启动独立后台进程，不会修改已经打开的 Blender 窗口。连续操作应放在同一脚本内，或保存场景后在下一次调用中载入。只有可信脚本才应交给此接口执行。
+
+</details>
+
+<details>
+<summary><b>Blender.run：完整 bpy 入口</b></summary>
+
+`run(code, *, params=None, blend_file=None, timeout=None, cwd=None, factory_startup=True, extra_args=(), script_args=()) → BlenderResult`
+
+- `code`：在 Blender 自带 Python 中执行的源代码。
+- `params`：可 JSON 序列化的参数映射；脚本中通过 `params` 读取。
+- `blend_file`：可选的已有场景，需真实存在。
+- `cwd`：子进程当前工作位置；影响普通相对数据路径。
+- `factory_startup`：默认从工厂设置启动；需要用户启动设置时可设为 `False`。
+- `extra_args`：Blender 启动参数列表；不要破坏内部脚本执行协议。
+- `script_args`：提供给脚本的参数列表。
+- `timeout=None`：使用实例默认时限；单次正数可覆盖默认值。
+
+脚本自动获得 `bpy` 与 `params`。把 JSON 兼容结果赋给 `result`，宿主侧通过 `job.data` 接收。
+
+```python
+from pathlib import Path
+
+scene_path = Path("example.blend").resolve()
+job = blender.run("""
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.mesh.primitive_cube_add(size=params["size"])
+cube = bpy.context.object
+cube.name = "ZepholvCube"
+cube.rotation_euler = (0.2, 0.3, 0.4)
+
+bpy.ops.object.camera_add(location=(5, -5, 4))
+camera = bpy.context.object
+camera.rotation_euler = (cube.location - camera.location).to_track_quat("-Z", "Y").to_euler()
+bpy.context.scene.camera = camera
+
+bpy.ops.object.light_add(type="AREA", location=(2, -2, 5))
+bpy.context.object.data.energy = 500
+bpy.context.object.data.size = 4
+
+bpy.ops.wm.save_as_mainfile(filepath=params["save_to"])
+result = {"name": cube.name, "location": list(cube.location)}
+""", params={"size": 1.0, "save_to": str(scene_path)})
 print(job.data)
 ```
 
-通过 `run` 可执行完整 Blender Python API；另有 `run_script`、`call`、
-`render`、`command` 和 `launch`。每次后台调用均为独立进程；连续操作放在
-同一脚本，或通过 `.blend` 文件传递场景。依赖界面的功能仍受 Blender
-上下文限制。完整示例和错误处理见 [Blender 文档](docs/blender.md)。
+`bpy.data`、`bpy.ops`、动画、修改器、几何节点、导入导出等可在此入口使用。依赖交互编辑器或选择状态的算子仍受 Blender 上下文限制；无法把 Blender 内存对象直接传回宿主，向量和数组应先转为普通数据。
 
-## Hogel 合成与完整实验
+</details>
+
+<details>
+<summary><b>Blender.run_script：执行现有 Python 脚本</b></summary>
+
+`run_script(script, *, params=None, blend_file=None, timeout=None, cwd=None, factory_startup=True, extra_args=(), script_args=()) → BlenderResult`
+
+除首个参数为脚本路径外，其余参数与 `run` 相同。保留脚本的 `__file__` 和同级模块导入语义；脚本内 `sys.argv = [script_path, *script_args]`。
 
 ```python
-from zepholv.blender import Blender
-from zepholv.stereogram import SynthesisConfig, run_reproduction
+job = blender.run_script(
+    "my_scene.py",
+    params={"size": 1.5},
+    script_args=["--quality", "preview"],
+    cwd=".",
+    timeout=180,
+)
+print(job.data)
+```
 
-summary = run_reproduction(
-    Blender(r"D:\software_fileprocess\blender5.1", low_priority=True),
-    "../test/results/my_experiment",  # 当前工作目录为 Zepholv/
-    scene="teapot_sphere", config=SynthesisConfig(),
+脚本中同样使用 `bpy`、`params` 和 `result`；脚本必须由调用者准备。
+
+</details>
+
+<details>
+<summary><b>Blender.call、render、command、launch</b></summary>
+
+**单个算子**
+
+`call(operator, *, kwargs=None, blend_file=None, save_to=None, timeout=None) → BlenderResult`
+
+```python
+job = blender.call(
+    "mesh.primitive_uv_sphere_add",
+    kwargs={"radius": 0.5, "location": [0, 0, 1]},
+    blend_file=scene_path,
+    save_to="edited.blend",
+)
+print(job.data)  # 例如 ["FINISHED"]
+```
+
+接受 `mesh.primitive_uv_sphere_add` 或带 `bpy.ops.` 前缀的名字。复杂选择、上下文覆盖和多步操作请使用 `run`。
+
+**已有相机的单帧渲染**
+
+`render(blend_file, output, *, frame=1, engine=None, resolution=None, image_format="PNG", timeout=None) → BlenderResult`
+
+```python
+job = blender.render(
+    scene_path,
+    "preview.png",
+    frame=1,
+    engine="CYCLES",
+    resolution=(512, 384),
+    image_format="PNG",
+)
+print(job.data["output"])
+```
+
+此方法的 `resolution=(宽,高)`，与光场 `CameraGrid.resolution=(行,列)` 不同。场景需要已配置的相机；引擎标识必须由目标 Blender 版本支持。
+
+**命令行入口**
+
+`command(args, *, timeout=None, cwd=None, check=True) → BlenderResult`
+
+```python
+job = blender.command(["--version"], check=True)
+print(job.stdout)
+```
+
+`args` 必须为参数序列，不接受整条命令字符串；不经 shell 拼接。`check=False` 允许非零退出码作为结果返回，但进程启动失败和超时仍会抛出异常。
+
+**启动独立界面**
+
+`launch(blend_file=None, *, args=(), cwd=None) → subprocess.Popen`
+
+```python
+# 仅在需要交互界面时主动调用，不连接已有窗口。
+# process = blender.launch(scene_path)
+# print(process.pid)
+```
+
+界面进程不会提供 `run` 的 JSON 结果协议，生命周期由调用者管理。
+
+</details>
+
+<details>
+<summary><b>BlenderResult、BlenderError、BlenderTimeoutError</b></summary>
+
+`BlenderResult` 是不可变结果对象，通常不需要手动创建。
+
+| 字段 | 含义 |
+|---|---|
+| `data` | 脚本赋给 `result` 的 JSON 兼容对象 |
+| `stdout` / `stderr` | 子进程的标准输出和标准错误 |
+| `returncode` | 进程退出码 |
+| `command` | 实际参数元组 |
+| `elapsed` | 该次调用耗时，秒 |
+
+`BlenderError` 表示启动、脚本、退出码或响应协议失败；`BlenderTimeoutError` 是其子类，表示限时到达，当前 Blender 子进程已被终止并回收。异常的 `.result` 可能包含日志，也可能为 `None`。
+
+```python
+from zepholv.blender import BlenderError, BlenderTimeoutError
+
+try:
+    job = blender.run("result = bpy.app.version_string", timeout=30)
+    print(job.data, job.elapsed)
+except BlenderTimeoutError as error:
+    print("任务超时", error.result.stdout if error.result else "")
+except BlenderError as error:
+    print(str(error))
+    if error.result:
+        print(error.result.stderr)
+```
+
+只管理本次 Blender 子进程，不自动托管用户脚本自行创建的其他进程。
+
+</details>
+
+## 相机、渲染与模型
+
+<details>
+<summary><b>CameraGrid：平面阵列与投影几何</b></summary>
+
+`CameraGrid(views=(10,10), resolution=(1000,1000), distance_m=0.4, fov_deg=30, image_fov_deg=30)`
+
+| 参数 / 属性 | 含义 |
+|---|---|
+| `views` | 相机阵列 `(行,列)` |
+| `resolution` | 每张采集图像的 `(高,宽)` |
+| `distance_m` | 相机平面至再中心化零平面的距离 |
+| `fov_deg` | 相机阵列覆盖的全角 |
+| `image_fov_deg` | 单幅图像的水平视场 |
+| `plane_width_m` | 零平面的图像宽度 `2D tan(image_fov/2)` |
+| `plane_height_m` | 宽度乘图像高宽比 |
+
+`camera(row, column) → dict` 返回相机行列、位置与镜头偏移，不会启动 Blender。
+
+```python
+from zepholv.blender import CameraGrid
+
+grid = CameraGrid(views=(3, 3), resolution=(96, 96))
+print(grid.camera(0, 0))
+print(grid.plane_width_m, grid.plane_height_m)
+```
+
+光轴平行并沿 -Z；用 lens shift 锁定 z=0 平面中心，不是让相机旋转追踪目标。世界 +Y 向上，图像行号向下。
+
+</details>
+
+<details>
+<summary><b>RenderSettings：CPU 渲染设置</b></summary>
+
+`RenderSettings(samples=16, threads=2, pause_seconds=0.005, seed=2020, preview_size=512)`
+
+`samples` 为采样数；`threads` 为 Blender CPU 线程；`pause_seconds` 为逐视图暂停；`seed` 为渲染随机种子；`preview_size` 为独立预览的边长。对象不可变，创建时检查正值约束。
+
+```python
+from zepholv.blender import RenderSettings
+
+settings = RenderSettings(
+    samples=16, threads=2, pause_seconds=0.005,
+    seed=2020, preview_size=512,
 )
 ```
 
-默认配置使用论文尺寸，编码全部 2500 个 Hogel、保存四个迭代检查点，
-并导出所有 SLM 帧、数值诊断和三维图表。CPU 渲染限制两个线程。
-结果是有来源记录的计算实现；原文公式与未公开细节的歧义、替代场景和额外
-建模假设均显式记录，不能声称完成了完全相同的作者实验或实体光学打印。
+</details>
 
-完整三场景运行及逐步 API 见 [复现说明](docs/reproduction.md)。
+<details>
+<summary><b>render_lightfield：完整光场采集</b></summary>
 
-## 测试与打包
+`render_lightfield(blender, output, *, grid=CameraGrid(), scene="teapot_sphere", bunny_mesh=None, settings=RenderSettings(), resume=True) → Path`
 
-安装后运行测试，无需额外测试框架：
+```python
+from zepholv.blender import render_lightfield
 
-```console
-python -m unittest discover -s ../test -v
+manifest = render_lightfield(
+    blender,
+    "a_new_capture",
+    grid=grid,
+    scene="teapot_sphere",
+    settings=settings,
+    resume=True,
+)
+print(manifest)
 ```
 
-构建 wheel 和源码包：
+内置 `teapot_sphere`、`bunny_carrot`、`depth_shapes`。兔子场景需要 `bunny_mesh`；此接口当前不直接接收任意用户场景，自定义场景可使用通用 Blender 桥接。
 
-```console
-python -m pip install build
-python -m build
+返回采集清单路径；同时保存所有视图、相机矩阵、投影标记点、校验值与模型。相同完整请求允许复用或继续；请求改变时应使用新的输出位置。`resume=False` 不会强制覆盖已有采集。
+
+</details>
+
+<details>
+<summary><b>download_stanford_bunny：显式下载与校验</b></summary>
+
+`download_stanford_bunny(destination) → Path`
+
+```python
+from zepholv.blender import download_stanford_bunny
+
+bunny = download_stanford_bunny("bunny.ply")
+manifest = render_lightfield(
+    blender, "a_new_bunny_capture",
+    grid=grid, scene="bunny_carrot", bunny_mesh=bunny, settings=settings,
+)
 ```
 
-生成文件位于 `dist/`，可通过 `python -m pip install dist/<生成的文件名>.whl`
-安装。源码包包含文档和 C++ 占位源码；外部测试、Notebook、参考快照、模型和实验输出独立保存在同级 `test/`，不进入安装包。
+首次主动调用需要网络；只提取 Stanford 归档中指定的 PLY。记录来源和 SHA256，后续校验本地缓存；已有但未经验证的目标不会被静默覆盖。使用条件以 Stanford 原始数据说明为准。
 
-### 中文 Notebook
+</details>
 
-在 `D:/pyworks/quanxi`（`Zepholv` 和 `test` 的上级目录）执行：
+## 配置与方法约定
 
-```powershell
-python -m pip install -e './Zepholv[notebook,test]'
-python -m ipykernel install --user --name zepholv --display-name 'Python (zepholv)'
-python -m jupyterlab test/reproduction.ipynb
+<details>
+<summary><b>SynthesisConfig、validation、派生属性和 to_dict</b></summary>
+
+`SynthesisConfig(...)` 是不可变计算配置。直接创建使用大尺寸默认值。
+
+| 参数 | 默认值 | 含义 |
+|---|---|---|
+| `hogels` | `(50,50)` | 空间 Hogel 阵列 |
+| `conventional_views` | `(50,50)` | 传统分支相机阵列 |
+| `proposed_views` | `(10,10)` | 提出分支相机阵列 |
+| `extraction` | `(20,20)` | 提出分支的空间块提取尺寸 |
+| `mapping` | `"block_permutation"` | 显式可逆块映射约定 |
+| `wavelength_m` | `532e-9` | 波长 |
+| `distance_m` | `0.4` | 采集平面与观察距离 |
+| `depth_separation_m` | `0.04` | 深度间隔记录值；当前不自动调整内置模型 |
+| `camera_fov_deg` | `30` | 采集全视场 |
+| `pupil_diameter_m` | `0.002` | 瞳孔直径 |
+| `hologram_sampling_m` | `129e-6` | 瞳孔诊断的空间采样间距 |
+| `printed_hogel_pitch_m` | `0.001` | 打印位移步长 |
+| `slm_pixel_pitch_m` | `6.4e-6` | SLM 像素间距 |
+| `slm_shape` | `(1080,1920)` | SLM 帧的行列数 |
+| `iterations` | `(10,30,50,100)` | 检查点，最大值为总迭代数 |
+| `phase_levels` | `None` | 总流程最终相位码级数，空值时使用 256 |
+| `display_gray_levels` | `8` | 检查点的显示灰阶 |
+| `seed` | `2020` | IFTA 随机种子基值 |
+
+```python
+from zepholv.stereogram import SynthesisConfig
+
+config = SynthesisConfig()
+print(config.proposed_resolution)  # hogels × extraction → (1000,1000)
+print(config.angular_shape)        # proposed_views × extraction → (200,200)
+print(config.to_dict())
+
+config = SynthesisConfig.validation()
+# 12×12 空间 Hogel；3×3 提出视角；extraction=(8,8)。
+# 对应单视图 96×96、角向 Hogel 24×24；仍使用四个标准迭代检查点。
 ```
 
-选择 `Python (zepholv)` 内核后从上往下运行。默认是三场景小尺寸完整计算，所有阶段即时显示图像，
-并另行展示已有论文尺寸结果。修改配置单元中的 `PROFILE` 可计算论文尺寸；不会覆盖已有 `paper/` 数据。
+自定义参数时，应同时检查数组尺寸与物理采样的一致性，而不只通过基本类型检查。
 
-## 文档与 C++
+</details>
 
-```console
-python -m pip install -e ".[docs]"
-python -m sphinx -M html docs docs/_build
+<details>
+<summary><b>paper_audit、PaperAmbiguityError：方法约定的程序化检查</b></summary>
+
+`paper_audit() → dict` 返回已知参数、未确定细节和本实现的明确选择，不会自动联网更新。
+
+`PaperAmbiguityError` 是 `ValueError` 子类；当调用者要求按未完整定义的字面索引执行时，配置会拒绝猜测。
+
+```python
+from zepholv.stereogram import paper_audit, PaperAmbiguityError, SynthesisConfig
+
+audit = paper_audit()
+print(audit["implemented_choices"])
+
+try:
+    SynthesisConfig(mapping="literal")
+except PaperAmbiguityError as error:
+    print(error)
 ```
 
-文档首页为 `docs/_build/html/index.html`。
-C++ 构建步骤见 [docs/cpp.md](docs/cpp.md)。当前 `pip install .` 只构建
-Python 包，C++ 为独立的可选构建入口，尚未接入 wheel 自动构建。
+提出分支采用披露过的可逆块索引补全。可逆性证明样本不丢失，不等于获得了原始作者程序或完成了光学标定。
 
-暂不添加 Git/GitHub、在线文档发布或社区治理配置。
-许可证尚未指定；对外发布前请补充许可证及作者信息。
+</details>
+
+## 强度、重排与逆映射
+
+以下数值示例共用这组小型合成数据，便于无需 Blender 就检查数组约定；它们不是上方实验动图的数据来源。
+
+```python
+from pathlib import Path
+from uuid import uuid4
+import numpy as np
+
+work = Path("numerical_examples") / uuid4().hex[:12]
+work.mkdir(parents=True, exist_ok=True)
+rng = np.random.default_rng(2020)
+P = rng.random((3, 3, 96, 96), dtype=np.float32)
+P_conventional = rng.random((12, 12, 12, 12), dtype=np.float32)
+
+yy, xx = np.mgrid[-1:1:24j, -1:1:24j]
+target = np.exp(-5 * (xx**2 + yy**2)).astype(np.float32)
+```
+
+<details>
+<summary><b>load_perspectives：采集图像到线性强度</b></summary>
+
+`load_perspectives(manifest, output, *, verify_hashes=True) → numpy.memmap`
+
+```python
+from zepholv.stereogram import load_perspectives
+
+# manifest 取自前面的实际 render_lightfield 返回值。
+captured = load_perspectives(
+    manifest, work / "captured.npy", verify_hashes=True,
+)
+print(captured.shape)  # [相机行, 相机列, 图像行, 图像列]
+```
+
+检查清单完成状态、相机索引、数量、尺寸和默认开启的 SHA256；逐张解 sRGB，再以 `[0.2126,0.7152,0.0722]` 合成为线性亮度。输出为 float32 磁盘映射，不会重新渲染。
+
+**颜色工具的模块级导入**
+
+```python
+from zepholv.stereogram.lightfield import srgb_to_linear, linear_to_srgb
+
+rgb = np.array([0.2, 0.5, 0.8], dtype=np.float32)
+linear = srgb_to_linear(rgb)
+display_rgb = linear_to_srgb(linear)
+```
+
+`srgb_to_linear(image)` 要求有限值且在 [0,1]；`linear_to_srgb(image)` 会先裁到 [0,1]，仅适合显示，不应拿显示截断后的数据替代原始误差计算。两者当前不由顶层入口导出。
+
+</details>
+
+<details>
+<summary><b>rearrange_conventional、rearrange_proposed</b></summary>
+
+`rearrange_conventional(perspectives, *, output=None) → ndarray | memmap`
+
+`rearrange_proposed(perspectives, extraction=(20,20), *, output=None) → ndarray | memmap`
+
+```python
+from zepholv.stereogram import rearrange_conventional, rearrange_proposed
+
+H_conventional = rearrange_conventional(P_conventional)
+H = rearrange_proposed(P, extraction=(8, 8), output=work / "hogels.npy")
+print(H_conventional.shape)  # (12,12,12,12)
+print(H.shape)               # (12,12,24,24)
+```
+
+传统映射为 `H[i,j,V,U] = P[V,U,i,j]`；提出映射为：
+
+```text
+H[i,j,bv*V+a,bu*U+b] = P[V,U,bv*i+a,bu*j+b]
+0 ≤ a < bv，0 ≤ b < bu
+```
+
+重排阶段不插值；提取尺寸必须整除输入图像尺寸。`output=None` 返回内存数组，提供路径时写入磁盘映射。
+
+</details>
+
+<details>
+<summary><b>perspective_from_hogels、restore_perspectives</b></summary>
+
+`perspective_from_hogels(hogels, row, column, *, extraction=(1,1)) → ndarray`
+
+`restore_perspectives(hogels, extraction=(1,1), *, output=None) → ndarray | memmap`
+
+```python
+from zepholv.stereogram import perspective_from_hogels, restore_perspectives
+
+view = perspective_from_hogels(H, 1, 1, extraction=(8, 8))
+np.testing.assert_array_equal(view, P[1, 1])
+
+P_restored = restore_perspectives(H, extraction=(8, 8))
+np.testing.assert_array_equal(P_restored, P)
+```
+
+前者只恢复指定相机位置，`row/column` 是相机索引；后者恢复全部视图。传统分支取 `extraction=(1,1)`。如果输入是相位重建后的角向强度，输出是编码后的视差图，不再保证等于输入目标。
+
+</details>
+
+## 傅里叶、IFTA 与整阵列编码
+
+<details>
+<summary><b>fft2c、ifft2c、object_field</b></summary>
+
+`fft2c(field)` / `ifft2c(field)`：中心化、正交归一化二维正/逆傅里叶变换，每次使用一个 FFT worker。
+
+`object_field(intensity, *, phase=None) → complex ndarray`：角向强度先开方，可选乘角向相位，再做中心化逆变换。
+
+```python
+from zepholv.stereogram import fft2c, ifft2c, object_field
+
+field = object_field(target)
+recovered_amplitude = fft2c(field)
+np.testing.assert_allclose(
+    abs(recovered_amplitude)**2, target, rtol=1e-4, atol=1e-6,
+)
+np.testing.assert_allclose(ifft2c(fft2c(field)), field, atol=1e-6)
+
+field_with_phase = object_field(target, phase=np.zeros_like(target))
+```
+
+`object_field` 返回复场，不是可直接显示的 phase-only 相位；它也不是调用 `ifta` 的必经前置步骤。
+
+</details>
+
+<details>
+<summary><b>ifta、IFTAResult 与 IFTAFrame</b></summary>
+
+`ifta(intensity, *, iterations=100, checkpoints=(10,30,50,100), seed=2020, initial_phase=None, phase_levels=None, track_history=True) → IFTAResult`
+
+| 参数 | 用法 |
+|---|---|
+| `intensity` | 二维、有限、非负目标强度；不是幅度 |
+| `iterations` | 正整数总迭代数 |
+| `checkpoints` | 要保留的迭代次数 |
+| `seed` | 随机初始相位种子 |
+| `initial_phase` | 可选同形状弧度数组；替代随机初始化 |
+| `phase_levels` | `None` 为连续相位；整数 2～256 时每次迭代都量化 |
+| `track_history` | 是否逐次记录 MSE，关闭可减少计算开销 |
+
+```python
+from zepholv.stereogram import ifta, IFTAResult
+
+solution = ifta(
+    target,
+    iterations=100,
+    checkpoints=(10, 30, 50, 100),
+    seed=2020,
+    phase_levels=None,
+    track_history=True,
+)
+assert isinstance(solution, IFTAResult)
+print(solution.phase.shape, solution.intensity.shape)
+print(solution.snapshots[30].psnr_db)
+print(len(solution.mse_history))
+```
+
+`IFTAResult` 字段为 `phase`、`intensity`、`snapshots`、`mse_history`。`snapshots[n]` 是 `IFTAFrame`，字段为 `phase`、`intensity`、`psnr_db`；需直接引用类型时使用：
+
+```python
+from zepholv.stereogram.ifta import IFTAFrame
+frame30: IFTAFrame = solution.snapshots[30]
+```
+
+算法在 SLM 均匀幅度与目标傅里叶幅度约束之间迭代；返回强度按目标总功率归一化，不做最小二乘亮度拟合。全黑目标返回零强度和占位相位，实际不应曝光。
+
+</details>
+
+<details>
+<summary><b>quantize_phase、decode_phase、reconstruct_fourier、psnr</b></summary>
+
+`quantize_phase(phase, levels=256) → uint8 ndarray`
+
+`decode_phase(codes, levels=256) → float32 ndarray`
+
+`reconstruct_fourier(phase, *, total_power=1.0) → float32 ndarray`
+
+`psnr(reference, reconstructed, *, peak=1.0) → float`
+
+```python
+from zepholv.stereogram import (
+    quantize_phase, decode_phase, reconstruct_fourier, psnr,
+)
+
+codes = quantize_phase(solution.phase, levels=256)
+phase = decode_phase(codes, levels=256)
+intensity = reconstruct_fourier(
+    phase, total_power=float(target.sum(dtype=np.float64)),
+)
+score = psnr(target, intensity, peak=1.0)
+print(codes.dtype, score)
+```
+
+相位码使用 2π 周期环绕。编码与解码级数必须一致；仅有相位码不足以确定绝对亮度，应显式说明总功率。`psnr` 要求相同非空形状，默认峰值固定为 1，MSE=0 时为正无穷。
+
+</details>
+
+<details>
+<summary><b>encode_hogels：整阵列相位优化和存储</b></summary>
+
+`encode_hogels(hogels, output, *, angular_shape=None, iterations=100, phase_levels=256, seed=2020, pause_seconds=0.001, progress=None, representative=None, checkpoints=(10,30,50,100), view_extraction=(1,1)) → Path`
+
+```python
+from zepholv.stereogram import encode_hogels, low_impact
+
+with low_impact(threads=2):
+    encoded_summary = encode_hogels(
+        H,
+        work / "encoding",
+        angular_shape=(24, 24),
+        iterations=100,
+        phase_levels=256,
+        seed=2020,
+        pause_seconds=0.001,
+        progress=lambda done, total: print(f"Hogel 行：{done}/{total}"),
+        representative=(0, 0),
+        checkpoints=(10, 30, 50, 100),
+        view_extraction=(8, 8),
+    )
+print(encoded_summary)
+```
+
+- `hogels` 是四维角向强度。
+- `angular_shape` 决定每个相位块的尺寸；未传则用原生角向尺寸，不同尺寸会双线性插值强度。
+- `phase_levels` 决定最终输出码的级数；内部优化仍使用连续相位，**不同于** `ifta(phase_levels=...)`。
+- `representative` 指定一个空间坐标，额外保存其完整检查点与误差历史。
+- `view_extraction` 是拼接检查点视图的块尺寸，传统取 (1,1)，提出分支取真实提取因子。
+- `progress(done,total)` 每完成一个 Hogel 行调用一次。
+- 返回编码摘要路径；实际保存全部相位码、相应重建强度、有效标记、逐 Hogel 指标、检查点和代表结果。
+
+此底层函数会写入指定位置。参数指纹保护由完整流程入口管理；独立调用时请主动选择新的输出位置。
+
+**模块级插值工具**
+
+```python
+from zepholv.stereogram.ifta import resize_intensity
+
+enlarged = resize_intensity(target, (48, 48))
+```
+
+`resize_intensity(image, shape)` 用双线性插值改变二维强度尺寸，不是相位插值，也不是无损排列；当前未由顶层入口导出。
+
+</details>
+
+## 传播、重聚焦与瞳孔
+
+<details>
+<summary><b>angular_spectrum：复场自由空间传播</b></summary>
+
+`angular_spectrum(field, *, wavelength_m=532e-9, pixel_pitch_m=6.4e-6, distance_m=0.4, padding=2, bandlimit=True) → complex64 ndarray`
+
+```python
+from zepholv.stereogram import angular_spectrum
+
+slm_field = np.exp(1j * phase)
+propagated = angular_spectrum(
+    slm_field,
+    wavelength_m=532e-9,
+    pixel_pitch_m=6.4e-6,
+    distance_m=0.001,
+    padding=2,
+    bandlimit=True,
+)
+propagated_intensity = abs(propagated)**2
+```
+
+输入和输出都是复场；`distance_m` 可指定传播方向。`padding` 是正整数补零倍率，`bandlimit` 控制频率带限。它不自动加入透镜、中继成像、记录材料或全阵列相干性。
+
+</details>
+
+<details>
+<summary><b>refocus_lightfield：几何重聚焦</b></summary>
+
+`refocus_lightfield(perspectives, grid, *, depth_m=0, output_shape=(256,256)) → float32 ndarray`
+
+```python
+from zepholv.stereogram import refocus_lightfield
+from zepholv.blender import CameraGrid
+
+numerical_grid = CameraGrid(views=(3, 3), resolution=(96, 96))
+focused = refocus_lightfield(
+    P, numerical_grid, depth_m=0.02, output_shape=(256, 256),
+)
+```
+
+按深度相关位移对**全部采集视图强度**求和，并对有效重叠区域加权归一化。输入视角维数须匹配 `grid.views`，深度需小于相机距离。正深度朝向相机；这是光场几何诊断，不是相位传播。
+
+</details>
+
+<details>
+<summary><b>pupil_reconstruction：有限瞳孔的强度积分</b></summary>
+
+`pupil_reconstruction(hogels, *, eye_m=(0,0,0.4), pupil_diameter_m=0.002, hogel_pitch_m=129e-6, fov_deg=30, samples=9) → float32 ndarray`
+
+```python
+from zepholv.stereogram import pupil_reconstruction
+
+eye_view = pupil_reconstruction(
+    H,
+    eye_m=(0.01, 0, 0.4),
+    pupil_diameter_m=0.002,
+    hogel_pitch_m=129e-6,
+    fov_deg=30,
+    samples=9,
+)
+print(eye_view.shape)  # Hogel 空间尺寸 (12,12)
+```
+
+输入是角向强度，可为目标 H 或相位编码后的重建角向强度，不能直接传整数相位码。模型在瞳孔内采样、按射线方向插值并作非相干平均，额外假设角向单元在 tan(θ) 上均匀分布；这不是已测系统的自动标定。
+
+</details>
+
+## SLM 与打印任务
+
+<details>
+<summary><b>OpticalSetup、relay_magnification、diffraction_limit</b></summary>
+
+`OpticalSetup(...)` 保存不可变的光学与数据导出设置：
+
+| 参数 | 默认值 |
+|---|---|
+| `wavelength_m` | `532e-9` |
+| `slm_shape` | `(1080,1920)` |
+| `slm_pixel_pitch_m` | `6.4e-6` |
+| `lens_f1_m` / `lens_f2_m` | `0.085` / `0.025` |
+| `reference_angle_deg` | `45` |
+| `exposure_seconds` | `0.2` |
+| `signal_reference_ratio` | `1` |
+| `material` | `"Ultimate U08M silver halide"` |
+| `hogel_pitch_m` | `0.001` |
+| `settling_seconds` | `None` |
+
+`relay_magnification` 为焦距比 `lens_f2_m/lens_f1_m`。
+
+`diffraction_limit(wavelength_m=532e-9, aperture_m=0.00128) → dict` 返回 `radians` 与 `degrees`，采用 λ/孔径的角尺度。
+
+```python
+from zepholv.stereogram import OpticalSetup, diffraction_limit
+
+setup = OpticalSetup(slm_shape=(1080, 1920), exposure_seconds=0.2)
+print(setup.relay_magnification)
+print(diffraction_limit(wavelength_m=532e-9, aperture_m=0.00128))
+```
+
+`settling_seconds` 当前为记录字段；实际执行时由设备后端的 `wait_until_settled()` 决定稳定等待。保存这些参数不代表装置、孔径或功率已经标定。
+
+</details>
+
+<details>
+<summary><b>slm_frame：单 Hogel 到显示帧</b></summary>
+
+`slm_frame(phase_codes, *, phase_levels=256, shape=(1080,1920), lut=None) → uint8 ndarray`
+
+```python
+from zepholv.stereogram import slm_frame
+
+frame = slm_frame(codes, phase_levels=256, shape=(1080, 1920))
+print(frame.shape, frame.dtype)
+```
+
+相位块原尺寸居中放置，不拉伸，不能超过 SLM 帧大小。`lut` 可为长度等于 `phase_levels` 的实测 8 位灰度映射；空值使用理想线性映射。背景零相位不等于关光，真实装置须处理光阑与有效区域。
+
+</details>
+
+<details>
+<summary><b>export_print_job：完整 SLM 序列与扫描计划</b></summary>
+
+`export_print_job(encoding, output, *, setup=OpticalSetup(), scan="serpentine", lut=None, calibration_id=None) → Path`
+
+```python
+from zepholv.stereogram import export_print_job, OpticalSetup
+
+plan = export_print_job(
+    work / "encoding",
+    work / "print_data",
+    setup=OpticalSetup(),
+    scan="serpentine",
+)
+print(plan)
+```
+
+读取已完成的编码摘要，为所有 Hogel 导出完整 PNG 与任务记录，包含顺序、空间索引、X/Y 位移、帧路径、曝光标记和时间。可选 `scan="raster"`；空 Hogel 仍导出帧但不曝光。
+
+默认仅导出数据，`optical_experiment_performed=False`。使用实测 `lut` 与明确 `calibration_id` 可为后续设备执行准备任务；这些标记本身不能证明测量正确。
+
+</details>
+
+<details>
+<summary><b>PrinterBackend、execute_print_job：设备驱动边界</b></summary>
+
+`PrinterBackend` 是协议，不是已实现的厂家驱动。后端需要提供：
+
+| 方法 | 责任 |
+|---|---|
+| `move_to(x_m, y_m)` | 将平台移到指定位置 |
+| `show_frame(path)` | 向实际 SLM 显示该帧 |
+| `wait_until_settled()` | 确认设备稳定 |
+| `open_shutter()` | 安全开启曝光 |
+| `close_shutter()` | 关闭快门 |
+
+`execute_print_job(manifest, backend, *, sleep=time.sleep) → dict`
+
+只有带校准编号且记录为已提供 LUT 的任务才允许执行。执行器在移动与显示前关闭快门，按曝光标记控制时长，异常及结束时关闭快门。
+
+```python
+from zepholv.stereogram import PrinterBackend, execute_print_job, export_print_job
+
+def execute_with_measured_calibration(
+    backend: PrinterBackend,
+    measured_lut,
+    calibration_id: str,
+):
+    # 必须由调用者提供经过测量的 LUT 和真实设备后端。
+    calibrated_plan = export_print_job(
+        work / "encoding",
+        work / "calibrated_print_data",
+        lut=measured_lut,
+        calibration_id=calibration_id,
+    )
+    return execute_print_job(calibrated_plan, backend)
+
+# 不在示例中连接设备或自动曝光。
+```
+
+`sleep` 可注入用于模拟测试；返回 `{"records_processed":数量}`。该接口不自动连接设备，标记门槛也不能替代真实硬件安全联锁。
+
+</details>
+
+## 完整流程、可视化与资源控制
+
+<details>
+<summary><b>run_reproduction：双分支完整计算入口</b></summary>
+
+`run_reproduction(blender, output, *, scene="teapot_sphere", config=SynthesisConfig(), settings=RenderSettings(), bunny_mesh=None, export_frames=True, visualize=True, progress=print, restart_incomplete=False) → Path`
+
+```python
+from zepholv.stereogram import run_reproduction, SynthesisConfig
+from zepholv.blender import RenderSettings
+
+summary_path = run_reproduction(
+    blender,
+    "a_new_full_run",
+    scene="teapot_sphere",
+    config=SynthesisConfig.validation(),
+    settings=RenderSettings(samples=16, threads=2),
+    export_frames=True,
+    visualize=True,
+    progress=print,
+    restart_incomplete=False,
+)
+```
+
+它调度采集、解码、两个分支重排、逐视角逆映射检查、全部 Hogel 编码、视差/瞳孔/波传播诊断、SLM 导出和绘图。兔子场景需另传 `bunny_mesh`。返回摘要文件的 `Path`，不是直接返回字典。
+
+同一任务记录配置和数值源码指纹；请求不同应使用新输出位置。`restart_incomplete=True` 只允许特定的未完成任务在其他请求相同、仅源码变化时重新编码，不是任意覆盖开关。部分阶段会重算，不应把它当作任意粒度的事务恢复系统。
+
+</details>
+
+<details>
+<summary><b>visualize_reproduction、index_reproductions</b></summary>
+
+`visualize_reproduction(output) → Path` 读取标准完整结果，生成静态阶段图、视差 GIF、输入模型三维图、几何焦平面体及单场景页面。
+
+`index_reproductions(output) → Path` 汇总多个子任务的摘要，生成各场景报告入口。
+
+```python
+from zepholv.stereogram import visualize_reproduction, index_reproductions
+
+scene_report = visualize_reproduction(summary_path.parent)
+collection_report = index_reproductions(summary_path.parent.parent)
+print(scene_report, collection_report)
+```
+
+可视化不启动 Blender，不重新执行完整编码，但会更新图表与报告。默认导出打印数据的完整任务含 13 张阶段 PNG、2 个视差动画、2 个交互三维页面。输入网格不等于重建网格；几何焦平面体也不是实体光学重建。
+
+汇总入口只生成链接，不自动检查每份底层数据是否齐全。
+
+</details>
+
+<details>
+<summary><b>low_impact：限制数值资源</b></summary>
+
+`low_impact(threads=2)` 是上下文管理器，限制可控制的数值线程池，并在 Windows 上临时降低当前 Python 进程优先级；退出时恢复。
+
+```python
+from zepholv.stereogram import low_impact, ifta
+
+with low_impact(threads=2):
+    solution = ifta(target, iterations=100)
+```
+
+它不直接设置 Blender 渲染线程，也不是全局 CPU 百分比限速器；Blender 线程由 `RenderSettings` 管理，FFT 内部另用单 worker。大规模结果还会产生内存与磁盘开销。
+
+</details>
+
+## 版本与使用边界
+
+```python
+import zepholv
+print(zepholv.__version__)
+```
+
+当前公共接口面向单色数值计算与打印输入数据。几何光场、单 Hogel 传播、输入模型三维图与完整实体光学实验需要严格区分；本项目不会把合成图像作为真实打印照片。低层数据导出不会自动标定实际 SLM 的相位、有效孔径、功率、位移平台或感光材料。
+
+原始方法参考 [Dashdavaa et al., Applied Sciences 10(22), 8088](https://doi.org/10.3390/app10228088)；基本 GS 投影与归一化参考 [slmsuite 固定提交](https://github.com/holodyne/slmsuite/tree/5ac5a19ac356fe238a54db8a0a6be7114f085cf8)，相关 MIT 许可与署名随软件保留。兔子模型来自 [Stanford 3D Scanning Repository](https://graphics.stanford.edu/data/3Dscanrep/)。Zepholv 自身尚未声明整体发布许可证，公开再分发前应补充相应授权信息。
